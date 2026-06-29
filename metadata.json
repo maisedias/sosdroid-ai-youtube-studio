@@ -1,0 +1,6 @@
+{
+  "name": "SOSDROID AI YOUTUBE STUDIO",
+  "description": "Ferramenta profissional de SEO para YouTube focada em jogos e aplicativos Android, com geração de títulos, descrições, tags, análise de SEO e YouTube Safe Mode.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
