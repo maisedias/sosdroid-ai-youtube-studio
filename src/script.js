@@ -303,10 +303,41 @@ function initPlayStoreMetadataRetriever() {
       
     } catch (e) {
       console.error(e);
-      showToast("Não foi possível buscar automaticamente. Preencha manualmente nos campos abaixo.", "warning");
-      // Allow manual edits by activating fields
-      state.appData = { name: query };
-      DOM.metaName.value = query;
+      
+      // Clean query to get a clean fallback app name
+      let cleanFallbackName = query;
+      if (query.includes("details?id=")) {
+        const idMatch = query.match(/id=([a-zA-Z0-9._]+)/);
+        if (idMatch && idMatch[1]) {
+          const parts = idMatch[1].split(".");
+          cleanFallbackName = parts[parts.length - 1];
+        }
+      } else if (query.includes(".")) {
+        const parts = query.split(".");
+        cleanFallbackName = parts[parts.length - 1];
+      }
+      
+      cleanFallbackName = cleanFallbackName
+        .replace(/[-_]+/g, " ")
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .replace(/\b\w/g, c => c.toUpperCase())
+        .trim();
+
+      if (!cleanFallbackName) cleanFallbackName = "Aplicativo Android";
+
+      state.appData = { 
+        name: cleanFallbackName,
+        category: "Ferramentas / Utilidades",
+        developer: "Android Developer",
+        version: "Varia de acordo com o dispositivo",
+        downloads: "1M+",
+        lastUpdated: "Atualizado recentemente",
+        description: "",
+        icon: "https://play-lh.googleusercontent.com/c28668Y4uEPf1Xl8ALe6v3I0_b_E52N_yUuX-362yv78v94J3P3-F=w240-h240"
+      };
+      
+      renderAppMetadataForm(state.appData);
+      showToast("Não foi possível buscar automaticamente. Preencha o nome do app e outros campos abaixo manualmente.", "warning");
     } finally {
       DOM.searchLoader.classList.add("hidden");
       DOM.appMetadataContainer.style.opacity = "1";
