@@ -70,54 +70,99 @@ async function startServer() {
           let version = "Varia de acordo com o dispositivo";
           let downloads = "100.000+";
 
-          // 1. Try parsing JSON-LD microdata first
+          // 1. Try parsing JSON-LD microdata - Scan all ld+json blocks to locate the SoftwareApplication type
           try {
-            const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i;
-            const match = html.match(jsonLdRegex);
-            if (match && match[1]) {
-              const data = JSON.parse(match[1].trim());
-              name = data.name || "";
-              icon = data.image || "";
-              category = data.genre || "";
-              developer = data.author?.name || "";
-              description = data.description || "";
+            const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^]*?>([\s\S]*?)<\/script>/gi;
+            let match;
+            while ((match = jsonLdRegex.exec(html)) !== null) {
+              try {
+                const parsed = JSON.parse(match[1].trim());
+                if (parsed) {
+                  const items = Array.isArray(parsed) ? parsed : [parsed];
+                  for (const item of items) {
+                    if (item["@type"] === "SoftwareApplication" || item.genre || item.image || item.author) {
+                      if (item.name) name = item.name;
+                      if (item.image) icon = item.image;
+                      if (item.genre) category = item.genre;
+                      if (item.author?.name) developer = item.author.name;
+                      if (item.description) description = item.description;
+                    }
+                  }
+                }
+              } catch (e) {
+                // Ignore parsing errors for other non-related JSON-LD scripts (like BreadcrumbList)
+              }
             }
           } catch (jsonErr) {
             console.warn("JSON-LD parsing failed, trying regular expressions...");
           }
 
-          // 2. Open-Graph Meta Tags & Regex Fallbacks (extremely stable since OG tags rarely change)
+          // 2. Open-Graph & Meta Tags fallbacks (very stable since they rarely change)
           if (!name) {
-            const titleMatch = html.match(/<meta property="og:title" content="([^"]+)"/i) || html.match(/<title>([^<]+) - Apps/i);
-            if (titleMatch) {
-              name = titleMatch[1].replace(" - Apps no Google Play", "").replace(" - Apps on Google Play", "").trim();
-            }
+            const titleMatch = html.match(/<meta property="og:title" content="([^"]+)"/i) || 
+                               html.match(/<meta name="twitter:title" content="([^"]+)"/i) ||
+                               html.match(/<title>([^<]+)<\/title>/i);
+            if (titleMatch) name = titleMatch[1];
           }
+          if (name) {
+            name = name.replace(" - Apps no Google Play", "")
+                       .replace(" - Apps on Google Play", "")
+                       .replace(" – Apps no Google Play", "")
+                       .replace(" – Apps on Google Play", "")
+                       .split(" - ")[0].trim();
+          }
+
           if (!icon) {
-            const imageMatch = html.match(/<meta property="og:image" content="([^"]+)"/i) || html.match(/<img itemprop="image" src="([^"]+)"/i);
+            const imageMatch = html.match(/<meta property="og:image" content="([^"]+)"/i) || 
+                               html.match(/<meta name="twitter:image" content="([^"]+)"/i) ||
+                               html.match(/<link rel="image_src" href="([^"]+)"/i) ||
+                               html.match(/<img itemprop="image" src="([^"]+)"/i);
             if (imageMatch) icon = imageMatch[1].trim();
           }
+
           if (!description) {
-            const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/i) || html.match(/<meta name="description" content="([^"]+)"/i);
+            const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/i) || 
+                              html.match(/<meta name="description" content="([^"]+)"/i);
             if (descMatch) description = descMatch[1].trim();
           }
+
+          // Discard generic global Google Play Store descriptions
+          if (description && (
+            description.includes("Aproveite milhões") || 
+            description.includes("Enjoy millions") || 
+            description.includes("Android apps, games, music") ||
+            description.length < 30
+          )) {
+            description = "";
+          }
+
           if (!developer) {
-            const devMatch = html.match(/href="\/store\/apps\/developer\?id=[^"]+"><span>([^<]+)<\/span>/i) || html.match(/<div class="Vbf7sn"><span>([^<]+)<\/span>/i) || html.match(/itemprop="author">[^<]*<span[^>]*>([^<]+)<\/span>/i);
+            const devMatch = html.match(/href="\/store\/apps\/developer\?id=[^"]+"><span>([^<]+)<\/span>/i) || 
+                             html.match(/<div class="Vbf7sn"><span>([^<]+)<\/span>/i) || 
+                             html.match(/itemprop="author">[^<]*<span[^>]*>([^<]+)<\/span>/i) ||
+                             html.match(/class="hrb33">([^<]+)<\/div>/i);
             if (devMatch) developer = devMatch[1].trim();
           }
+
           if (!category) {
-            const genreMatch = html.match(/href="\/store\/apps\/category\/[^"]+"><span>([^<]+)<\/span>/i) || html.match(/itemprop="genre">([^<]+)<\/span>/i);
+            const genreMatch = html.match(/href="\/store\/apps\/category\/[^"]+"><span>([^<]+)<\/span>/i) || 
+                               html.match(/itemprop="genre">([^<]+)<\/span>/i) ||
+                               html.match(/href="\/store\/apps\/stream\/[^"]+"><span>([^<]+)<\/span>/i);
             if (genreMatch) category = genreMatch[1].trim();
           }
 
-          // Extra details
-          const updateMatch = html.match(/Atualizado em ([0-9]+ de [a-zA-Z]+ de [0-9]+)/i) || html.match(/Updated on ([a-zA-Z0-9\s,]+)/);
+          // Extract extra metadata safely
+          const updateMatch = html.match(/Atualizado em ([0-9]+ de [a-zA-Z]+ de [0-9]+)/i) || 
+                              html.match(/Updated on ([a-zA-Z0-9\s,]+)/i) ||
+                              html.match(/class="A9669">([^<]+)<\/div>/i);
           if (updateMatch) lastUpdated = updateMatch[1];
 
-          const dlMatch = html.match(/([0-9]+[M|K|\+]+) de downloads/i) || html.match(/([0-9MKB\+]+)\+ downloads/i);
+          const dlMatch = html.match(/([0-9]+[M|K|\+]+) de downloads/i) || 
+                          html.match(/([0-9MKB\+]+)\+ downloads/i) ||
+                          html.match(/class="JU1S6b">([^<]+)<\/div>/i);
           if (dlMatch) downloads = dlMatch[1];
 
-          // Set reliable defaults if any field is still blank
+          // Set reliable default placeholders if fields are still blank
           name = name || "Aplicativo Android";
           icon = icon || "https://play-lh.googleusercontent.com/c28668Y4uEPf1Xl8ALe6v3I0_b_E52N_yUuX-362yv78v94J3P3-F=w240-h240";
           category = category || "Ferramentas";
@@ -138,6 +183,8 @@ async function startServer() {
               downloads
             }
           });
+        } else {
+          console.warn(`Direct fetch Play Store page returned status: ${response.status}. Falling back to Gemini...`);
         }
       } catch (e) {
         console.error("Play Store direct scrape failed, falling back to Gemini:", e);

@@ -40,22 +40,23 @@ export async function searchAppMetadata(query) {
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${localKey}`;
     
-    const prompt = `Retorne os metadados para o app/jogo Android "${query}" em JSON. Se for um link da Play Store, extraia o nome inteligível e forneça informações plausíveis se reais não estiverem disponíveis.`;
+    const prompt = `Retorne os metadados reais para o app/jogo Android "${query}" em JSON. Se a consulta for um link ou um nome geral, use a ferramenta de busca para encontrar a página oficial do app na Play Store (play.google.com/store/apps/details) e retorne os dados correspondentes.`;
     
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
+      tools: [{ googleSearch: {} }],
       systemInstruction: {
         parts: [{
-          text: `Você é um recuperador de metadados da Play Store. Retorne exclusivamente um objeto JSON correspondente a este schema:
+          text: `Você é um recuperador de metadados reais da Google Play Store. Use o Google Search para encontrar a página oficial do aplicativo no Google Play, extraia as informações corretas e retorne exclusivamente um objeto JSON correspondente a este schema:
 {
-  "name": "Nome do app",
-  "icon": "URL de ícone representativo (ex: https://images.unsplash.com/photo-... ou URL padrão)",
-  "category": "Gênero",
-  "developer": "Desenvolvedor",
-  "description": "Descrição detalhada (mínimo 3 parágrafos)",
-  "lastUpdated": "Data recente de atualização (ex: 15 de Junho de 2026)",
-  "version": "Versão recente",
-  "downloads": "Estimativa de Downloads"
+  "name": "Nome real do app",
+  "icon": "URL real do ícone do app obtido na Play Store (ou URL padrão se não encontrado)",
+  "category": "Gênero/Categoria real",
+  "developer": "Desenvolvedor real",
+  "description": "Descrição detalhada (mínimo 3 parágrafos completos sobre o aplicativo)",
+  "lastUpdated": "Data recente de atualização (ex: 20 de Junho de 2026)",
+  "version": "Versão recente (ex: 1.25.0)",
+  "downloads": "Estimativa real de Downloads (ex: 10M+, 500K+)"
 }`
         }]
       },
@@ -78,7 +79,18 @@ export async function searchAppMetadata(query) {
     const resJson = await response.json();
     const textOutput = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
     
-    return JSON.parse(textOutput.trim());
+    if (!textOutput) {
+      throw new Error("Nenhum conteúdo retornado pela API do Gemini.");
+    }
+
+    // Clean markdown code block markers to avoid JSON.parse syntax errors
+    let cleanText = textOutput.trim();
+    if (cleanText.startsWith("```")) {
+      cleanText = cleanText.replace(/^```[a-zA-Z]*\s*/, "");
+      cleanText = cleanText.replace(/\s*```$/, "");
+    }
+
+    return JSON.parse(cleanText.trim());
   } catch (err) {
     console.error("Direct API metadata fetch failed:", err);
     throw new Error("Não foi possível obter dados. Verifique sua Chave API Gemini.");
