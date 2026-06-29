@@ -29,11 +29,17 @@ async function startServer() {
       return res.status(400).json({ error: "O parâmetro query é obrigatório." });
     }
 
-    // Helper to extract package ID from Google Play URL
+    // Helper to extract package ID from Google Play URL or direct input
     const getPackageId = (url: string): string | null => {
       try {
         const match = url.match(/id=([a-zA-Z0-9._]+)/);
-        return match ? match[1] : null;
+        if (match) return match[1];
+
+        // If the query looks like a standard package ID (e.g. com.mojang.minecraftpe)
+        if (/^[a-zA-Z0-9._]+$/.test(url) && url.includes(".")) {
+          return url;
+        }
+        return null;
       } catch {
         return null;
       }
@@ -44,86 +50,145 @@ async function startServer() {
     if (packageId) {
       // Attempt scraping from Play Store details page
       try {
-        const playUrl = `https://play.google.com/store/apps/details?id=${packageId}`;
+        const playUrl = `https://play.google.com/store/apps/details?id=${packageId}&hl=pt_BR`;
         const response = await fetch(playUrl, {
           headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
           }
         });
 
         if (response.ok) {
           const html = await response.text();
-          // Try parsing JSON-LD microdata
-          const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i;
-          const match = html.match(jsonLdRegex);
           
-          if (match && match[1]) {
-            const data = JSON.parse(match[1].trim());
-            
-            // Scrape extra fields like last updated and version from meta / body if possible
-            // In modern Play Store, version/update are in divs or script bundles. Let's do a regex fallback
-            let lastUpdated = "Não disponível";
-            let version = "Varia de acordo com o dispositivo";
-            let downloads = "100.000+";
+          let name = "";
+          let icon = "";
+          let category = "";
+          let developer = "";
+          let description = "";
+          let lastUpdated = "Recente";
+          let version = "Varia de acordo com o dispositivo";
+          let downloads = "100.000+";
 
-            const updateMatch = html.match(/Atualizado em ([0-9]+ de [a-zA-Z]+ de [0-9]+)/i) || html.match(/Updated on ([a-zA-Z0-9\s,]+)/);
-            if (updateMatch) lastUpdated = updateMatch[1];
-
-            return res.json({
-              success: true,
-              source: "Google Play Scraper",
-              data: {
-                name: data.name || "Aplicativo Android",
-                icon: data.image || "https://play-lh.googleusercontent.com/c28668Y4uEPf1Xl8ALe6v3I0_b_E52N_yUuX-362yv78v94J3P3-F=w240-h240",
-                category: data.genre || "Ferramentas",
-                developer: data.author?.name || "Desenvolvedor Android",
-                description: data.description || "Descrição oficial indisponível.",
-                lastUpdated: lastUpdated,
-                version: version,
-                downloads: downloads
-              }
-            });
+          // 1. Try parsing JSON-LD microdata first
+          try {
+            const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i;
+            const match = html.match(jsonLdRegex);
+            if (match && match[1]) {
+              const data = JSON.parse(match[1].trim());
+              name = data.name || "";
+              icon = data.image || "";
+              category = data.genre || "";
+              developer = data.author?.name || "";
+              description = data.description || "";
+            }
+          } catch (jsonErr) {
+            console.warn("JSON-LD parsing failed, trying regular expressions...");
           }
+
+          // 2. Open-Graph Meta Tags & Regex Fallbacks (extremely stable since OG tags rarely change)
+          if (!name) {
+            const titleMatch = html.match(/<meta property="og:title" content="([^"]+)"/i) || html.match(/<title>([^<]+) - Apps/i);
+            if (titleMatch) {
+              name = titleMatch[1].replace(" - Apps no Google Play", "").replace(" - Apps on Google Play", "").trim();
+            }
+          }
+          if (!icon) {
+            const imageMatch = html.match(/<meta property="og:image" content="([^"]+)"/i) || html.match(/<img itemprop="image" src="([^"]+)"/i);
+            if (imageMatch) icon = imageMatch[1].trim();
+          }
+          if (!description) {
+            const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/i) || html.match(/<meta name="description" content="([^"]+)"/i);
+            if (descMatch) description = descMatch[1].trim();
+          }
+          if (!developer) {
+            const devMatch = html.match(/href="\/store\/apps\/developer\?id=[^"]+"><span>([^<]+)<\/span>/i) || html.match(/<div class="Vbf7sn"><span>([^<]+)<\/span>/i) || html.match(/itemprop="author">[^<]*<span[^>]*>([^<]+)<\/span>/i);
+            if (devMatch) developer = devMatch[1].trim();
+          }
+          if (!category) {
+            const genreMatch = html.match(/href="\/store\/apps\/category\/[^"]+"><span>([^<]+)<\/span>/i) || html.match(/itemprop="genre">([^<]+)<\/span>/i);
+            if (genreMatch) category = genreMatch[1].trim();
+          }
+
+          // Extra details
+          const updateMatch = html.match(/Atualizado em ([0-9]+ de [a-zA-Z]+ de [0-9]+)/i) || html.match(/Updated on ([a-zA-Z0-9\s,]+)/);
+          if (updateMatch) lastUpdated = updateMatch[1];
+
+          const dlMatch = html.match(/([0-9]+[M|K|\+]+) de downloads/i) || html.match(/([0-9MKB\+]+)\+ downloads/i);
+          if (dlMatch) downloads = dlMatch[1];
+
+          // Set reliable defaults if any field is still blank
+          name = name || "Aplicativo Android";
+          icon = icon || "https://play-lh.googleusercontent.com/c28668Y4uEPf1Xl8ALe6v3I0_b_E52N_yUuX-362yv78v94J3P3-F=w240-h240";
+          category = category || "Ferramentas";
+          developer = developer || "Desenvolvedor Android";
+          description = description || "Descrição oficial indisponível no momento.";
+
+          return res.json({
+            success: true,
+            source: "Google Play Scraper (Resilient Mode)",
+            data: {
+              name,
+              icon,
+              category,
+              developer,
+              description,
+              lastUpdated,
+              version,
+              downloads
+            }
+          });
         }
       } catch (e) {
-        console.error("Play Store scraping failed, falling back to Gemini:", e);
+        console.error("Play Store direct scrape failed, falling back to Gemini:", e);
       }
     }
 
-    // Fallback / App name search: Use Gemini to retrieve realistic and accurate metadata
+    // Verify API Key existence before invoking Gemini
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ 
+        error: "Chave API do Gemini não configurada no servidor.", 
+        details: "Por favor, configure sua chave API no painel de Secrets ou no botão 'Gemini Key' do cabeçalho." 
+      });
+    }
+
+    // Fallback / App name search: Use Gemini 3.5 Flash with Google Search Grounding to find actual details!
     try {
-      const prompt = `Consulte dados públicos recentes e confiáveis para retornar os metadados do aplicativo ou jogo Android: "${query}".
-  Forneça informações reais e bem estruturadas. Se o aplicativo não for muito conhecido, forneça informações plausíveis com base no nome.`;
+      const prompt = `Consulte os metadados reais mais recentes para o aplicativo ou jogo Android: "${query}".
+Se a consulta parecer um termo de busca geral (ex: "Minecraft", "Subway Surfers") ou um link sem ID, use a ferramenta de busca para localizar a página oficial do app no Google Play Store (play.google.com/store/apps/details) e retorne os dados corretos correspondentes ao schema especificado.`;
 
       const geminiResponse = await ai.models.generateContent({
         model: "gemini-3.5-flash",
         contents: prompt,
         config: {
-          systemInstruction: `Você é um recuperador profissional de metadados da Google Play Store. 
-  Sua tarefa é retornar um objeto JSON estrito com os metadados do aplicativo/jogo fornecido.
-  IMPORTANTE: Retorne APENAS o JSON no formato especificado. Não use markdown como \`\`\`json.`,
+          tools: [{ googleSearch: {} }],
+          systemInstruction: `Você é um recuperador de metadados reais da Google Play Store.
+Sua missão é usar o Google Search para encontrar a página oficial do aplicativo no Google Play Store, extrair suas informações reais e atualizadas e retornar um objeto JSON estrito com os metadados corretos.
+IMPORTANTE: Retorne APENAS o JSON no formato especificado. Não use blocos de código markdown como \`\`\`json.`,
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
             properties: {
               name: { type: Type.STRING, description: "Nome correto do jogo ou aplicativo" },
-              icon: { type: Type.STRING, description: "URL de um ícone de alta qualidade (pode ser o real ou uma URL de ilustração representativa do Unsplash)" },
-              category: { type: Type.STRING, description: "Categoria ou gênero (ex: Ação, RPG, Produtividade)" },
-              developer: { type: Type.STRING, description: "Nome da empresa ou desenvolvedor" },
-              description: { type: Type.STRING, description: "Descrição oficial resumida do jogo/app (pelo menos 3 parágrafos)" },
-              lastUpdated: { type: Type.STRING, description: "Data recente de última atualização (ex: 15 de Junho de 2026)" },
-              version: { type: Type.STRING, description: "Versão recente (ex: 2.14.5)" },
-              downloads: { type: Type.STRING, description: "Quantidade estimada de downloads (ex: 10M+, 500K+)" }
+              icon: { type: Type.STRING, description: "URL de alta qualidade do ícone real obtido na busca (ou URL padrão se indisponível)" },
+              category: { type: Type.STRING, description: "Categoria ou gênero real (ex: Ação, RPG, Produtividade)" },
+              developer: { type: Type.STRING, description: "Nome real da empresa ou desenvolvedor" },
+              description: { type: Type.STRING, description: "Descrição oficial real resumida do jogo/app (pelo menos 3 parágrafos)" },
+              lastUpdated: { type: Type.STRING, description: "Data recente de última atualização real (ex: 25 de Junho de 2026)" },
+              version: { type: Type.STRING, description: "Versão recente real (ex: 1.52.0)" },
+              downloads: { type: Type.STRING, description: "Quantidade real estimada de downloads (ex: 10M+, 500K+)" }
             },
             required: ["name", "icon", "category", "developer", "description", "lastUpdated", "version", "downloads"]
           }
         }
       });
 
-      const data = JSON.parse(geminiResponse.text?.trim() || "{}");
+      const text = geminiResponse.text?.trim() || "{}";
+      const data = JSON.parse(text);
+      
       return res.json({
         success: true,
-        source: "Gemini Knowledge Engine",
+        source: "Gemini Knowledge Engine with Search Grounding",
         data
       });
 
@@ -139,6 +204,14 @@ async function startServer() {
 
     if (!appData || !appData.name) {
       return res.status(400).json({ error: "Dados do aplicativo incompletos." });
+    }
+
+    // Verify API Key existence before invoking Gemini
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ 
+        error: "Chave API do Gemini não configurada no servidor.", 
+        details: "Por favor, configure sua chave API no painel de Secrets ou no botão 'Gemini Key' do cabeçalho." 
+      });
     }
 
     try {
