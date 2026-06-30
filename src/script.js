@@ -551,7 +551,7 @@ async function triggerAiGeneration() {
   DOM.generationLoaderCard.classList.remove("hidden");
 
   try {
-    updateProgress(25, "Conectando ao núcleo de IA do Gemini...");
+    updateProgress(25, "Conectando ao motor SOSDROID...");
     
     // Call AI Generation Layer
     const aiResponse = await generateSeoAssets({
@@ -627,7 +627,7 @@ async function triggerAiGeneration() {
 
   } catch (err) {
     console.error(err);
-    showToast("Erro durante a geração com Gemini. Verifique sua conexão ou chave de API.", "danger");
+    showToast("Erro durante a geração do SEO. Verifique os dados fornecidos.", "danger");
     DOM.resultsPlaceholderCard.classList.remove("hidden");
   } finally {
     DOM.generationLoaderCard.classList.add("hidden");
